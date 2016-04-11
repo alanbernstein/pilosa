@@ -252,6 +252,7 @@ type QueryRequest struct {
 	Timestamp        *int64   `protobuf:"varint,5,opt,name=Timestamp" json:"Timestamp,omitempty"`
 	Quantum          *uint32  `protobuf:"varint,6,opt,name=Quantum" json:"Quantum,omitempty"`
 	Remote           *bool    `protobuf:"varint,7,opt,name=Remote" json:"Remote,omitempty"`
+	CallbackURL      *string  `protobuf:"bytes,8,opt,name=CallbackURL" json:"CallbackURL,omitempty"`
 	XXX_unrecognized []byte   `json:"-"`
 }
 
@@ -306,6 +307,13 @@ func (m *QueryRequest) GetRemote() bool {
 		return *m.Remote
 	}
 	return false
+}
+
+func (m *QueryRequest) GetCallbackURL() string {
+	if m != nil && m.CallbackURL != nil {
+		return *m.CallbackURL
+	}
+	return ""
 }
 
 type QueryResponse struct {

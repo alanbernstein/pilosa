@@ -204,6 +204,41 @@ func TestExecutor_Execute_Biclique(t *testing.T) {
 	}
 }
 
+func TestExecutor_Execute_BicliqueAsync(t *testing.T) {
+	idx := MustOpenIndex()
+	defer idx.Close()
+	// generate some bitmaps
+	for i := uint64(0); i < 10; i++ {
+		if i%2 == 0 {
+			idx.MustCreateFragmentIfNotExists("d", "f", 0).SetBit(1, i, nil, 0)
+		}
+		if i%2 == 1 {
+			idx.MustCreateFragmentIfNotExists("d", "f", 0).SetBit(2, i, nil, 0)
+		}
+		if i != 5 {
+			idx.MustCreateFragmentIfNotExists("d", "f", 0).SetBit(3, i, nil, 0)
+		}
+	}
+	// Execute query.
+	e := NewExecutor(idx.Index, NewCluster(1))
+	resultChan, err := e.ExecuteAsync("d", MustParse(`Bicliques(frame=f, n=2)`), nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := make([]pilosa.Biclique, 2)
+	i := 0
+	for callRes := range resultChan {
+		results[i] = callRes.Result.(pilosa.Biclique)
+		i++
+	}
+	if !reflect.DeepEqual(results, []pilosa.Biclique{
+		{Tiles: []uint64{3}, Count: 9, Score: 9},
+		{Tiles: []uint64{3, 1}, Count: 5, Score: 10},
+	}) {
+		t.Fatalf("unexpected result: %s", spew.Sdump(results))
+	}
+}
+
 // Ensure a TopN() query can be executed.
 func TestExecutor_Execute_TopN_fill(t *testing.T) {
 	idx := MustOpenIndex()

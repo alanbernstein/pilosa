@@ -129,11 +129,15 @@ func TestFragment_maxBiclique(t *testing.T) {
 		f.MustSetBits(uint64(rand.Intn(8)), i)
 	}
 
-	ret := pilosa.BCList(f.MaxBiclique(3))
-	sort.Sort(ret)
+	ret := f.MaxBiclique(3)
+	retList := make(pilosa.BCList, 0)
+	for bc := range ret {
+		retList = append(retList, bc)
+	}
+	sort.Sort(retList)
 	fmt.Println("SWEET HOT RESULTS BELOW!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
-	for i := 0; i < len(ret); i++ {
-		fmt.Println(ret[i])
+	for i := 0; i < len(retList); i++ {
+		fmt.Println(retList[i])
 		if i > 5 {
 			break
 		}

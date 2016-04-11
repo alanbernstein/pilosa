@@ -21,7 +21,7 @@ func (bcl BCList) Swap(i, j int) {
 	bcl[i], bcl[j] = bcl[j], bcl[i]
 }
 
-func (f *Fragment) MaxBiclique(n int) []Biclique {
+func (f *Fragment) MaxBiclique(n int) chan Biclique {
 	f.mu.Lock()
 	f.cache.Invalidate()
 	pairs := f.cache.Top() // slice of bitmapPairs
@@ -38,18 +38,20 @@ func (f *Fragment) MaxBiclique(n int) []Biclique {
 		close(results)
 	}()
 
-	// read results and build []Biclique
-	bicliques := []Biclique{}
-	for bmPairs := range results {
-		tiles := getTileIDs(bmPairs)
-		bicliqueBitmap := intersectPairs(bmPairs)
-		bicliques = append(bicliques,
-			Biclique{
+	bicliques := make(chan Biclique, 100)
+	// read results and convert each []BitmapPair to Biclique
+	go func() {
+		for bmPairs := range results {
+			tiles := getTileIDs(bmPairs)
+			bicliqueBitmap := intersectPairs(bmPairs)
+			bicliques <- Biclique{
 				Tiles: tiles,
 				Count: bicliqueBitmap.Count(),
 				Score: uint64(len(tiles)) * bicliqueBitmap.Count(),
-			})
-	}
+			}
+		}
+		close(bicliques)
+	}()
 	return bicliques
 }
 

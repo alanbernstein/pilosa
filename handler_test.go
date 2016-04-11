@@ -502,6 +502,12 @@ func (c *HandlerExecutor) Execute(db string, query *pql.Query, slices []uint64, 
 	return c.ExecuteFn(db, query, slices, opt)
 }
 
+// just to implement the interface
+func (c *HandlerExecutor) ExecuteAsync(db string, query *pql.Query, slices []uint64, opt *pilosa.ExecOptions) (chan pilosa.CallRes, error) {
+	ch := make(chan pilosa.CallRes, 0)
+	return ch, nil
+}
+
 // Server represents a test wrapper for httptest.Server.
 type Server struct {
 	*httptest.Server

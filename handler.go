@@ -30,6 +30,7 @@ type Handler struct {
 	// The execution engine for running queries.
 	Executor interface {
 		Execute(db string, query *pql.Query, slices []uint64, opt *ExecOptions) ([]interface{}, error)
+		ExecuteAsync(db string, query *pql.Query, slices []uint64, opt *ExecOptions) (chan CallRes, error)
 	}
 
 	// The version to report on the /version endpoint.
@@ -56,6 +57,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case "POST":
 			h.handlePostQuery(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
+	case "/subscribe":
+		switch r.Method {
+		case "POST":
+			h.handlePostSubscribe(w, r)
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
@@ -158,6 +166,49 @@ func (h *Handler) handlePostQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Write response back to client.
+	if err := h.writeQueryResponse(w, r, resp); err != nil {
+		h.logger().Printf("write query response error: %s", err)
+	}
+}
+
+func (h *Handler) handlePostSubscribe(w http.ResponseWriter, r *http.Request) {
+	req, err := h.readQueryRequest(r)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		h.writeQueryResponse(w, r, &QueryResponse{Err: err})
+		return
+	} else if req.CallbackURL == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		h.writeQueryResponse(w, r, &QueryResponse{Err: errors.New("Must specify a CallbackURL in order to subscribe")})
+	}
+
+	// Build execution options.
+	opt := &ExecOptions{
+		Timestamp: req.Timestamp,
+		Quantum:   req.Quantum,
+		Remote:    req.Remote,
+	}
+
+	// Parse query string.
+	q, err := pql.NewParser(strings.NewReader(req.Query)).Parse()
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		h.writeQueryResponse(w, r, &QueryResponse{Err: err})
+		return
+	}
+
+	// Execute the query.
+	// returns a single chan that has the results of all calls concatenated
+	resultsChan, err := h.Executor.ExecuteAsync(req.DB, q, req.Slices, opt)
+	if err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		h.writeQueryResponse(w, r, &QueryResponse{Err: err})
+
+	}
+	go callbackResults(req, resultsChan)
+
+	resp := &QueryResponse{}
+
 	if err := h.writeQueryResponse(w, r, resp); err != nil {
 		h.logger().Printf("write query response error: %s", err)
 	}
@@ -491,16 +542,20 @@ type QueryRequest struct {
 	// If true, indicates that query is part of a larger distributed query.
 	// If false, this request is on the originating node.
 	Remote bool
+
+	// If this is a subscribe request, this is the URL which results will be POSTed to
+	CallbackURL string
 }
 
 func decodeQueryRequest(pb *internal.QueryRequest) *QueryRequest {
 	req := &QueryRequest{
-		DB:       pb.GetDB(),
-		Query:    pb.GetQuery(),
-		Slices:   pb.GetSlices(),
-		Profiles: pb.GetProfiles(),
-		Quantum:  TimeQuantum(pb.GetQuantum()),
-		Remote:   pb.GetRemote(),
+		DB:          pb.GetDB(),
+		Query:       pb.GetQuery(),
+		Slices:      pb.GetSlices(),
+		Profiles:    pb.GetProfiles(),
+		Quantum:     TimeQuantum(pb.GetQuantum()),
+		Remote:      pb.GetRemote(),
+		CallbackURL: pb.GetCallbackURL(),
 	}
 
 	if pb.Timestamp != nil {

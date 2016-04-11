@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"net/url"
 	"sort"
@@ -77,6 +78,71 @@ func (e *Executor) Execute(db string, q *pql.Query, slices []uint64, opt *ExecOp
 	}
 
 	return results, nil
+}
+
+func (e *Executor) ExecuteAsync(db string, q *pql.Query, slices []uint64, opt *ExecOptions) (chan CallRes, error) {
+	// TODO should we return a slice of channels, or just one channel? Should we flatten the results of each command into one channel, or keep the tree structure?
+	// Verify that a database is set.
+	if db == "" {
+		return nil, ErrDatabaseRequired
+	}
+
+	// Default options.
+	if opt == nil {
+		opt = &ExecOptions{}
+	}
+
+	// If slices aren't specified, then include all of them.
+	if len(slices) == 0 {
+		// Round up the number of slices.
+		sliceN := e.index.SliceN()
+		sliceN += (sliceN % uint64(len(e.Cluster.Nodes))) + uint64(len(e.Cluster.Nodes))
+
+		// Generate a slices of all slices.
+		slices = make([]uint64, sliceN+1)
+		for i := range slices {
+			slices[i] = uint64(i)
+		}
+	}
+
+	resultsChan := make(chan CallRes, 100)
+	go func() {
+		// Execute each call serially.
+		for _, call := range q.Calls {
+			switch c := call.(type) {
+			case *pql.Bicliques:
+				// TODO start getting results back and writing them to channel. executeAsyncBiclique
+				bcs := e.executeAsyncBiclique(db, c, slices, opt)
+				for bc := range bcs {
+					resultsChan <- CallRes{DB: db, Call: call, Result: bc}
+				}
+			default:
+				v, err := e.executeCall(db, call, slices, opt)
+				if err != nil {
+					resultsChan <- CallRes{DB: db, Call: call, Err: err}
+				}
+				resultsChan <- CallRes{DB: db, Call: call, Result: v}
+			}
+		}
+		close(resultsChan)
+	}()
+
+	return resultsChan, nil
+}
+
+type CallRes struct {
+	DB     string
+	Call   pql.Call
+	Err    error
+	Result interface{}
+}
+
+func (c CallRes) String() string {
+	return fmt.Sprintf("DB: %v, Call: %v, Result: %v", c.DB, c.Call.String(), c.Result)
+}
+
+func (c CallRes) Error() string {
+	return fmt.Sprintf("DB: %v, Call: %v, Error: %v", c.DB, c.Call.String(), c.Err.Error())
 }
 
 // executeCall executes a call.
@@ -232,7 +298,11 @@ func (e *Executor) executeBiclique(db string, c *pql.Bicliques, slices []uint64,
 				if err != nil {
 					return nil, err
 				}
-				results = Bicliques(results).Add(bc)
+				bcs := make([]Biclique, 0)
+				for b := range bc {
+					bcs = append(bcs, b)
+				}
+				results = Bicliques(results).Add(bcs)
 			}
 			continue
 		}
@@ -254,6 +324,48 @@ func (e *Executor) executeBiclique(db string, c *pql.Bicliques, slices []uint64,
 	}
 
 	return results, nil
+}
+
+func (e *Executor) executeAsyncBiclique(db string, c *pql.Bicliques, slices []uint64, opt *ExecOptions) chan Biclique {
+	// TODO - take a channel in, or make one and return?
+	// TODO decide how we're going to aggregate results from multiple nodes/slices
+	// currently this just naively gets all the results and sends them back on the channel with no sorting or merging
+
+	results := make(chan Biclique, 100)
+
+	func() {
+		for node, nodeSlices := range e.slicesByNode(slices) {
+			// Execute locally if the hostname matches.
+			if node.Host == e.Host {
+				for _, slice := range nodeSlices {
+					bcs, err := e.executeBicliqueSlice(db, c, slice)
+					if err != nil {
+						// return nil, err
+						log.Println("Error (local) in executeAsyncBiclique: ", err)
+					}
+					// results = Bicliques(results).Add(bc)
+					for bc := range bcs {
+						results <- bc
+					}
+				}
+				continue
+			}
+
+			// Otherwise execute remotely.
+			res, err := e.exec(node, db, &pql.Query{Calls: []pql.Call{c}}, nodeSlices, opt)
+			if err != nil {
+				// return nil, err
+				log.Println("Error (remote) in executeAsyncBiclique: ", err)
+			}
+			// results = Bicliques(results).Add(res[0].([]Biclique))
+			for _, bc := range res[0].([]Biclique) {
+				results <- bc
+			}
+		}
+		close(results)
+	}()
+
+	return results
 }
 
 // executeTopNSlice executes a TopN call for a single slice.
@@ -622,7 +734,7 @@ func decodeError(s string) error {
 	return errors.New(s)
 }
 
-func (e *Executor) executeBicliqueSlice(db string, c *pql.Bicliques, slice uint64) ([]Biclique, error) {
+func (e *Executor) executeBicliqueSlice(db string, c *pql.Bicliques, slice uint64) (chan Biclique, error) {
 	// Retrieve bitmap used to intersect.
 	frame := c.Frame
 	if frame == "" {
@@ -630,8 +742,11 @@ func (e *Executor) executeBicliqueSlice(db string, c *pql.Bicliques, slice uint6
 	}
 	f := e.Index().Fragment(db, frame, slice)
 	if f == nil {
-		return nil, nil
+		log.Println("return nil")
+		ch := make(chan Biclique, 0)
+		close(ch)
+		return ch, nil
 	}
 
-	return f.MaxBiclique(c.N), nil
+	return f.MaxBiclique(c.N), nil // TODO make this take a channel?
 }
