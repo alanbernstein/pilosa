@@ -9,6 +9,7 @@ import (
 	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"os"
 	"strconv"
 	"strings"
@@ -50,9 +51,31 @@ func NewHandler() *Handler {
 
 // ServeHTTP handles an HTTP request.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	t := time.Now()
+	// Handle pprof requests separately.
+	if strings.HasPrefix(r.URL.Path, "/debug/pprof") {
+		switch r.URL.Path {
+		case "/debug/pprof/cmdline":
+			pprof.Cmdline(w, r)
+		case "/debug/pprof/profile":
+			pprof.Profile(w, r)
+		case "/debug/pprof/symbol":
+			pprof.Symbol(w, r)
+		default:
+			pprof.Index(w, r)
+		}
+		return
+	}
 
+	// Route API calls to appropriate handler functions.
+	t := time.Now()
 	switch r.URL.Path {
+	case "/schema":
+		switch r.Method {
+		case "GET":
+			h.handleGetSchema(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	case "/query":
 		switch r.Method {
 		case "POST":
@@ -97,6 +120,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		default:
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
+	case "/frame/restore":
+		switch r.Method {
+		case "POST":
+			h.handlePostFrameRestore(w, r)
+		default:
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		}
 	case "/version":
 		h.handleVersion(w, r)
 
@@ -107,6 +137,39 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.logger().Printf("%s %s %.03fs", r.Method, r.URL.String(), time.Since(t).Seconds())
+}
+
+// handleGetSchema handles GET /schema requests.
+func (h *Handler) handleGetSchema(w http.ResponseWriter, r *http.Request) {
+	// Construct schema based on databases and frames.
+	var resp getSchemaResponse
+	for _, db := range h.Index.DBs() {
+		respDB := getSchemaDB{Name: db.Name()}
+		for _, frame := range db.Frames() {
+			respDB.Frames = append(respDB.Frames, getSchemaFrame{
+				Name: frame.Name(),
+			})
+		}
+		resp.DBs = append(resp.DBs, respDB)
+	}
+
+	// Write JSON to response.
+	if err := json.NewEncoder(w).Encode(resp); err != nil {
+		h.logger().Printf("write schema response error: %s", err)
+	}
+}
+
+type getSchemaResponse struct {
+	DBs []getSchemaDB `json:"dbs"`
+}
+
+type getSchemaDB struct {
+	Name   string           `json:"name"`
+	Frames []getSchemaFrame `json:"frames"`
+}
+
+type getSchemaFrame struct {
+	Name string `json:"name"`
 }
 
 // handlePostQuery handles /query requests.
@@ -483,6 +546,75 @@ func (h *Handler) handlePostFragmentData(w http.ResponseWriter, r *http.Request)
 	if _, err := f.ReadFrom(r.Body); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+}
+
+// handlePostFrameRestore handles POST /frame/restore requests.
+func (h *Handler) handlePostFrameRestore(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	host := q.Get("host")
+	db, frame := q.Get("db"), q.Get("frame")
+
+	// Validate query parameters.
+	if host == "" {
+		http.Error(w, "host required", http.StatusBadRequest)
+		return
+	} else if db == "" {
+		http.Error(w, "db required", http.StatusBadRequest)
+		return
+	} else if frame == "" {
+		http.Error(w, "frame required", http.StatusBadRequest)
+		return
+	}
+
+	// Create a client for the remote cluster.
+	client, err := NewClient(host)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Determine the maximum number of slices.
+	sliceN, err := client.SliceN()
+	if err != nil {
+		http.Error(w, "cannot determine remote slice count: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Loop over each slice and import it if this node owns it.
+	for slice := uint64(0); slice <= sliceN; slice++ {
+		// Ignore this slice if we don't own it.
+		if !h.Cluster.OwnsSlice(h.Host, slice) {
+			continue
+		}
+
+		// Otherwise retrieve the local fragment.
+		f, err := h.Index.CreateFragmentIfNotExists(db, frame, slice)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		// Stream backup from remote node.
+		r, err := client.BackupSlice(db, frame, slice)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		} else if r == nil {
+			continue // slice doesn't exist
+		}
+
+		// Restore to local frame and always close reader.
+		if err := func() error {
+			defer r.Close()
+			if _, err := f.ReadFrom(r); err != nil {
+				return err
+			}
+			return nil
+		}(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 }
 

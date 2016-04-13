@@ -1,9 +1,11 @@
 package pilosa
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 )
 
@@ -95,6 +97,20 @@ func (i *Index) DB(name string) *DB {
 
 func (i *Index) db(name string) *DB { return i.dbs[name] }
 
+// DBs returns a list of all databases in the index.
+func (i *Index) DBs() []*DB {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+
+	a := make([]*DB, 0, len(i.dbs))
+	for _, db := range i.dbs {
+		a = append(a, db)
+	}
+	sort.Sort(dbSlice(a))
+
+	return a
+}
+
 // CreateDBIfNotExists returns a database by name.
 // The database is created if it does not already exist.
 func (i *Index) CreateDBIfNotExists(name string) (*DB, error) {
@@ -104,6 +120,10 @@ func (i *Index) CreateDBIfNotExists(name string) (*DB, error) {
 }
 
 func (i *Index) createDBIfNotExists(name string) (*DB, error) {
+	if name == "" {
+		return nil, errors.New("database name required")
+	}
+
 	// Return database if it exists.
 	if db := i.db(name); db != nil {
 		return db, nil

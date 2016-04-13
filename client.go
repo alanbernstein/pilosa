@@ -92,6 +92,58 @@ func (c *Client) SliceNodes(slice uint64) ([]*Node, error) {
 	return a, nil
 }
 
+// ExecuteQuery executes query against db on the server.
+func (c *Client) ExecuteQuery(db, query string) (result interface{}, err error) {
+	if db == "" {
+		return nil, ErrDatabaseRequired
+	} else if query == "" {
+		return nil, ErrQueryRequired
+	}
+
+	// Encode query request.
+	buf, err := proto.Marshal(&internal.QueryRequest{
+		DB:    proto.String(db),
+		Query: proto.String(query),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %s", err)
+	}
+
+	// Create URL & HTTP request.
+	u := url.URL{Scheme: "http", Host: c.host, Path: "/query"}
+	req, err := http.NewRequest("POST", u.String(), bytes.NewReader(buf))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Length", strconv.Itoa(len(buf)))
+	req.Header.Set("Content-Type", "application/x-protobuf")
+	req.Header.Set("Accept", "application/x-protobuf")
+
+	// Execute request against the host.
+	resp, err := c.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Read body and unmarshal response.
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	} else if resp.StatusCode != http.StatusOK {
+		return nil, errors.New(string(body))
+	}
+
+	var qresp internal.QueryResponse
+	if err := proto.Unmarshal(body, &qresp); err != nil {
+		return nil, fmt.Errorf("unmarshal response: %s", err)
+	} else if s := qresp.GetErr(); s != "" {
+		return nil, errors.New(s)
+	}
+
+	return nil, nil
+}
+
 // Import bulk imports bits for a single slice to a host.
 func (c *Client) Import(db, frame string, slice uint64, bits []Bit) error {
 	if db == "" {
@@ -203,30 +255,21 @@ func (c *Client) BackupTo(w io.Writer, db, frame string) error {
 
 // backupSliceTo backs up a single slice to tw.
 func (c *Client) backupSliceTo(tw *tar.Writer, db, frame string, slice uint64) error {
-	// Retrieve a list of nodes that own the slice.
-	nodes, err := c.SliceNodes(slice)
-	if err != nil {
-		return fmt.Errorf("slice nodes: %s", err)
-	}
-
-	// Try to backup slice from each one until successful.
-	var data []byte
-	for _, i := range rand.Perm(len(nodes)) {
-		buf, err := c.backupSliceNode(db, frame, slice, nodes[i])
-		if err == nil {
-			data = buf
-			break // backup successful
-		} else if err == ErrFragmentNotFound {
-			return nil // slice doesn't exist
-		} else if err != nil {
-			log.Println(err)
-			continue
-		}
-	}
-
 	// Return error if unable to backup from any slice.
-	if data == nil {
-		return fmt.Errorf("unable to backup slice %d", slice)
+	r, err := c.BackupSlice(db, frame, slice)
+	if err != nil {
+		return fmt.Errorf("backup slice: slice=%d, err=%s", slice, err)
+	} else if r == nil {
+		return nil
+	}
+	defer r.Close()
+
+	// Read entire buffer to determine file size.
+	data, err := ioutil.ReadAll(r)
+	if err != nil {
+		return err
+	} else if err := r.Close(); err != nil {
+		return err
 	}
 
 	// Write slice file header.
@@ -247,7 +290,32 @@ func (c *Client) backupSliceTo(tw *tar.Writer, db, frame string, slice uint64) e
 	return nil
 }
 
-func (c *Client) backupSliceNode(db, frame string, slice uint64, node *Node) ([]byte, error) {
+// BackupSlice retrieves a streaming backup from a single slice.
+// This function tries slice owners until one succeeds.
+func (c *Client) BackupSlice(db, frame string, slice uint64) (io.ReadCloser, error) {
+	// Retrieve a list of nodes that own the slice.
+	nodes, err := c.SliceNodes(slice)
+	if err != nil {
+		return nil, fmt.Errorf("slice nodes: %s", err)
+	}
+
+	// Try to backup slice from each one until successful.
+	for _, i := range rand.Perm(len(nodes)) {
+		r, err := c.backupSliceNode(db, frame, slice, nodes[i])
+		if err == nil {
+			return r, nil // successfully attached
+		} else if err == ErrFragmentNotFound {
+			return nil, nil // slice doesn't exist
+		} else if err != nil {
+			log.Println(err)
+			continue
+		}
+	}
+
+	return nil, fmt.Errorf("unable to connect to any owner")
+}
+
+func (c *Client) backupSliceNode(db, frame string, slice uint64, node *Node) (io.ReadCloser, error) {
 	u := url.URL{
 		Scheme: "http",
 		Host:   node.Host,
@@ -262,16 +330,17 @@ func (c *Client) backupSliceNode(db, frame string, slice uint64, node *Node) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
 
 	// Return error if status is not OK.
 	if resp.StatusCode == http.StatusNotFound {
+		resp.Body.Close()
 		return nil, ErrFragmentNotFound
 	} else if resp.StatusCode != http.StatusOK {
+		resp.Body.Close()
 		return nil, fmt.Errorf("unexpected backup status code: host=%s, code=%d", node.Host, resp.StatusCode)
 	}
 
-	return ioutil.ReadAll(resp.Body)
+	return resp.Body, nil
 }
 
 // RestoreFrom restores a frame from a backup file to an entire cluster.
@@ -343,6 +412,32 @@ func (c *Client) restoreSliceFrom(buf []byte, db, frame string, slice uint64) er
 		if resp.StatusCode != http.StatusOK {
 			return fmt.Errorf("unexpected status code: host=%s, code=%d", node.Host, resp.StatusCode)
 		}
+	}
+
+	return nil
+}
+
+// RestoreFrame restores an entire frame from a host in another cluster.
+func (c *Client) RestoreFrame(host, db, frame string) error {
+	u := url.URL{
+		Scheme: "http",
+		Host:   c.Host(),
+		Path:   "/frame/restore",
+		RawQuery: url.Values{
+			"host":  {host},
+			"db":    {db},
+			"frame": {frame},
+		}.Encode(),
+	}
+	resp, err := c.HTTPClient.Post(u.String(), "application/octet-stream", nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+
+	// Return error if response not OK.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: host=%s, code=%d", host, resp.StatusCode)
 	}
 
 	return nil

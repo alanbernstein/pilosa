@@ -1,6 +1,7 @@
 package pilosa
 
 import (
+	"archive/tar"
 	"errors"
 	"fmt"
 	"io"
@@ -38,6 +39,9 @@ const (
 const (
 	// DefaultCacheFlushInterval is the default value for Fragment.CacheFlushInterval.
 	DefaultCacheFlushInterval = 1 * time.Minute
+
+	// DefaultFragmentMaxOpN is the default value for Fragment.MaxOpN.
+	DefaultFragmentMaxOpN = 1000
 )
 
 // Fragment represents the intersection of a frame and slice in a database.
@@ -54,6 +58,7 @@ type Fragment struct {
 	file        *os.File
 	storage     *roaring.Bitmap
 	storageData []byte
+	opN         int // number of ops since snapshot
 
 	// Bitmap cache.
 	cache Cache
@@ -64,6 +69,11 @@ type Fragment struct {
 
 	// The interval at which the cached bitmap ids are persisted to disk.
 	CacheFlushInterval time.Duration
+
+	// Number of operations performed before performing a snapshot.
+	// This limits the size of fragments on the heap and flushes them to disk
+	// so that they can be mmapped and heap utilization can be kept low.
+	MaxOpN int
 
 	// Writer used for out-of-band log entries.
 	LogOutput io.Writer
@@ -84,6 +94,7 @@ func NewFragment(path, db, frame string, slice uint64) *Fragment {
 
 		LogOutput:          os.Stderr,
 		CacheFlushInterval: DefaultCacheFlushInterval,
+		MaxOpN:             DefaultFragmentMaxOpN,
 	}
 }
 
@@ -121,6 +132,10 @@ func (f *Fragment) Open() error {
 		if err := f.openCache(); err != nil {
 			return err
 		}
+
+		// Periodically flush cache.
+		f.wg.Add(1)
+		go func() { defer f.wg.Done(); f.monitorCacheFlush() }()
 
 		return nil
 	}(); err != nil {
@@ -222,10 +237,6 @@ func (f *Fragment) openCache() error {
 		f.bitmap(bitmapID)
 	}
 
-	// Periodically flush cache.
-	f.wg.Add(1)
-	go func() { defer f.wg.Done(); f.monitorCacheFlush() }()
-
 	return nil
 }
 
@@ -245,12 +256,12 @@ func (f *Fragment) close() error {
 
 	// Flush cache if closing gracefully.
 	if err := f.flushCache(); err != nil {
-		f.logger().Printf("error flushing cache on close: err=%s, path=%s", err, f.path)
+		f.logger().Printf("fragment: error flushing cache on close: err=%s, path=%s", err, f.path)
 	}
 
 	// Close underlying storage.
 	if err := f.closeStorage(); err != nil {
-		f.logger().Printf("error closing storage: err=%s, path=%s", err, f.path)
+		f.logger().Printf("fragment: error closing storage: err=%s, path=%s", err, f.path)
 	}
 
 	return nil
@@ -336,8 +347,12 @@ func (f *Fragment) setBit(bitmapID, profileID uint64) (changed bool, bool error)
 	}
 
 	// Write to storage.
-
 	if changed, err = f.storage.Add(pos); err != nil {
+		return false, err
+	}
+
+	// If the number of operations exceeds the limit then snapshot.
+	if err := f.incrementOpN(); err != nil {
 		return false, err
 	}
 
@@ -345,8 +360,8 @@ func (f *Fragment) setBit(bitmapID, profileID uint64) (changed bool, bool error)
 	if f.bitmap(bitmapID).setBit(profileID) {
 		changed = true
 	}
-	return changed, nil
 
+	return changed, nil
 }
 
 func (f *Fragment) setTimeBit(bitmapID, profileID uint64, t time.Time, q TimeQuantum) (changed bool, err error) {
@@ -378,12 +393,17 @@ func (f *Fragment) ClearBit(bitmapID, profileID uint64) (bool, error) {
 		return false, err
 	}
 
+	// Increment number of operations until snapshot is required.
+	if err := f.incrementOpN(); err != nil {
+		return false, err
+	}
+
 	// Update the cache.
 	if f.bitmap(bitmapID).clearBit(profileID) {
 		return true, nil
 	}
-	return changed, nil
 
+	return changed, nil
 }
 
 // pos translates the bitmap ID and profile ID into a position in the storage bitmap.
@@ -592,6 +612,20 @@ func (f *Fragment) Import(bitmapIDs, profileIDs []uint64) error {
 	return nil
 }
 
+// incrementOpN increase the operation count by one.
+// If the count exceeds the maximum allowed then a snapshot is performed.
+func (f *Fragment) incrementOpN() error {
+	f.opN++
+	if f.opN <= f.MaxOpN {
+		return nil
+	}
+
+	if err := f.snapshot(); err != nil {
+		return fmt.Errorf("snapshot: %s", err)
+	}
+	return nil
+}
+
 // Snapshot writes the storage bitmap to disk and reopens it.
 func (f *Fragment) Snapshot() error {
 	f.mu.Lock()
@@ -600,6 +634,9 @@ func (f *Fragment) Snapshot() error {
 }
 
 func (f *Fragment) snapshot() error {
+	logger := f.logger()
+	logger.Printf("fragment: snapshotting %s/%s/%d", f.db, f.frame, f.slice)
+
 	// Create a temporary file to snapshot to.
 	snapshotPath := f.path + SnapshotExt
 	file, err := os.Create(snapshotPath)
@@ -627,6 +664,9 @@ func (f *Fragment) snapshot() error {
 	if err := f.openStorage(); err != nil {
 		return fmt.Errorf("open storage: %s", err)
 	}
+
+	// Reset operation count.
+	f.opN = 0
 
 	return nil
 }
@@ -682,10 +722,27 @@ func (f *Fragment) flushCache() error {
 
 // WriteTo writes the fragment's data to w.
 func (f *Fragment) WriteTo(w io.Writer) (n int64, err error) {
+	// Force cache flush.
+	if err := f.FlushCache(); err != nil {
+		return 0, err
+	}
+
+	// Write out data and cache to a tar archive.
+	tw := tar.NewWriter(w)
+	if err := f.writeStorageToArchive(tw); err != nil {
+		return 0, fmt.Errorf("write storage: %s", err)
+	}
+	if err := f.writeCacheToArchive(tw); err != nil {
+		return 0, fmt.Errorf("write cache: %s", err)
+	}
+	return 0, nil
+}
+
+func (f *Fragment) writeStorageToArchive(tw *tar.Writer) error {
 	// Open separate file descriptor to read from.
 	file, err := os.Open(f.path)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer file.Close()
 
@@ -704,12 +761,54 @@ func (f *Fragment) WriteTo(w io.Writer) (n int64, err error) {
 
 		return nil
 	}(); err != nil {
-		return 0, err
+		return err
+	}
+
+	// Write archive header.
+	if err := tw.WriteHeader(&tar.Header{
+		Name:    "data",
+		Mode:    0600,
+		Size:    sz,
+		ModTime: time.Now(),
+	}); err != nil {
+		return err
 	}
 
 	// Copy the file up to the last known size.
 	// This is done outside the lock because the storage format is append-only.
-	return io.CopyN(w, file, sz)
+	if _, err := io.CopyN(tw, file, sz); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (f *Fragment) writeCacheToArchive(tw *tar.Writer) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	// Read cache into buffer.
+	buf, err := ioutil.ReadFile(f.CachePath())
+	if os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+
+	// Write archive header.
+	if err := tw.WriteHeader(&tar.Header{
+		Name:    "cache",
+		Mode:    0600,
+		Size:    int64(len(buf)),
+		ModTime: time.Now(),
+	}); err != nil {
+		return err
+	}
+
+	// Write data to archive.
+	if _, err := tw.Write(buf); err != nil {
+		return err
+	}
+	return nil
 }
 
 // ReadFrom reads a data file from r and loads it into the fragment.
@@ -717,35 +816,81 @@ func (f *Fragment) ReadFrom(r io.Reader) (n int64, err error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	tr := tar.NewReader(r)
+	for {
+		// Read next tar header.
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		} else if err != nil {
+			return 0, err
+		}
+
+		// Process file based on file name.
+		switch hdr.Name {
+		case "data":
+			if err := f.readStorageFromArchive(tr); err != nil {
+				return 0, err
+			}
+		case "cache":
+			if err := f.readCacheFromArchive(tr); err != nil {
+				return 0, err
+			}
+		default:
+			return 0, fmt.Errorf("invalid fragment archive file: %s", hdr.Name)
+		}
+	}
+
+	return 0, nil
+}
+
+func (f *Fragment) readStorageFromArchive(r io.Reader) error {
 	// Create a temporary file to copy into.
 	path := f.path + CopyExt
 	file, err := os.Create(path)
 	if err != nil {
-		return 0, err
+		return err
 	}
 	defer file.Close()
 
 	// Copy reader into temporary path.
-	if n, err = io.Copy(file, r); err != nil {
-		return n, err
+	if _, err = io.Copy(file, r); err != nil {
+		return err
 	}
 
 	// Close current storage.
 	if err := f.closeStorage(); err != nil {
-		return n, err
+		return err
 	}
 
 	// Move snapshot to data file location.
 	if err := os.Rename(path, f.path); err != nil {
-		return n, err
+		return err
 	}
 
 	// Reopen storage.
 	if err := f.openStorage(); err != nil {
-		return n, err
+		return err
 	}
 
-	return n, nil
+	return nil
+}
+
+func (f *Fragment) readCacheFromArchive(r io.Reader) error {
+	// Slurp data from reader and write to disk.
+	buf, err := ioutil.ReadAll(r)
+	if err != nil {
+		return err
+	} else if err := ioutil.WriteFile(f.CachePath(), buf, 0666); err != nil {
+		return err
+	}
+
+	// Re-open cache.
+	if err := f.openCache(); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func madvise(b []byte, advice int) (err error) {
