@@ -181,7 +181,7 @@ func TestExecutor_Execute_Biclique(t *testing.T) {
 	idx := MustOpenIndex()
 	defer idx.Close()
 	// generate some bitmaps
-	for i := uint64(0); i < 10; i++ {
+	for i := uint64(0); i < 11; i++ {
 		if i%2 == 0 {
 			idx.MustCreateFragmentIfNotExists("d", "f", 0).SetBit(1, i, nil, 0)
 		}
@@ -194,11 +194,13 @@ func TestExecutor_Execute_Biclique(t *testing.T) {
 	}
 	// Execute query.
 	e := NewExecutor(idx.Index, NewCluster(1))
-	if result, err := e.Execute("d", MustParse(`Bicliques(frame=f, n=2)`), nil, nil); err != nil {
+	if result, err := e.Execute("d", MustParse(`Bicliques(frame=f, n=3)`), nil, nil); err != nil {
 		t.Fatal(err)
 	} else if !reflect.DeepEqual(result[0], []pilosa.Biclique{
-		{Tiles: []uint64{3, 1}, Count: 5, Score: 10},
-		{Tiles: []uint64{3}, Count: 9, Score: 9},
+		{Tiles: []uint64{3, 1}, Count: 6, Score: 12},
+		{Tiles: []uint64{3}, Count: 10, Score: 10},
+		{Tiles: []uint64{3, 2}, Count: 4, Score: 8},
+		{Tiles: []uint64{2}, Count: 5, Score: 5},
 	}) {
 		t.Fatalf("unexpected result: %s", spew.Sdump(result))
 	}
