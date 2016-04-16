@@ -294,12 +294,12 @@ func (e *Executor) executeBiclique(db string, c *pql.Bicliques, slices []uint64,
 		// Execute locally if the hostname matches.
 		if node.Host == e.Host {
 			for _, slice := range nodeSlices {
-				bc, err := e.executeBicliqueSlice(db, c, slice)
+				bcChan, err := e.executeBicliqueSlice(db, c, slice)
 				if err != nil {
 					return nil, err
 				}
 				bcs := make([]Biclique, 0)
-				for b := range bc {
+				for b := range bcChan {
 					bcs = append(bcs, b)
 				}
 				results = Bicliques(results).Add(bcs)
@@ -317,11 +317,6 @@ func (e *Executor) executeBiclique(db string, c *pql.Bicliques, slices []uint64,
 
 	// Sort final merged results.
 	sort.Sort(Bicliques(results))
-
-	// Only keep the top n after sorting.
-	if len(results) > c.N {
-		results = results[0:c.N]
-	}
 
 	return results, nil
 }
@@ -551,7 +546,6 @@ func (e *Executor) executeClearBit(db string, c *pql.ClearBit, opt *ExecOptions)
 func (e *Executor) executeSetBit(db string, c *pql.SetBit, opt *ExecOptions) (bool, error) {
 	slice := c.ProfileID / SliceWidth
 	ret := false
-
 	for _, node := range e.Cluster.SliceNodes(slice) {
 		// Update locally if host matches.
 		if node.Host == e.Host {
