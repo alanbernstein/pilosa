@@ -293,8 +293,10 @@ func (p Bicliques) Add(other []Biclique) []Biclique {
 
 	// Convert back to slice.
 	a := make([]Biclique, len(m), len(m))
+	i := 0
 	for _, v := range m {
-		a = append(a, v)
+		a[i] = v
+		i++
 	}
 	return a
 }

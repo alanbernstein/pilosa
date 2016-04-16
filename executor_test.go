@@ -225,11 +225,9 @@ func TestExecutor_Execute_BicliqueAsync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	results := make([]pilosa.Biclique, 2)
-	i := 0
+	results := make([]pilosa.Biclique, 0)
 	for callRes := range resultChan {
-		results[i] = callRes.Result.(pilosa.Biclique)
-		i++
+		results = append(results, callRes.Result.(pilosa.Biclique))
 	}
 	if !reflect.DeepEqual(results, []pilosa.Biclique{
 		{Tiles: []uint64{3}, Count: 9, Score: 9},
