@@ -1,6 +1,9 @@
 package pilosa
 
-import "fmt"
+import (
+	"fmt"
+	"log"
+)
 
 type Biclique struct {
 	Tiles []uint64
@@ -91,14 +94,21 @@ func bicliqueFind(G []BitmapPair, L *Bitmap, R []BitmapPair, P []BitmapPair, Q [
 	// R starts empty
 	// P starts as topPairs (all tiles are candidates)
 	// Q starts empty
-
+	if L == nil {
+		log.Printf("Call bicliqueFind L=Profiles[1 2 3], R=%v, P=%v, Q=%v", R, P, Q)
+	} else {
+		log.Printf("Call bicliqueFind L=%v, R=%v, P=%v, Q=%v", L, R, P, Q)
+	}
 	for len(P) > 0 {
 		// P ← P\{x};
 		x := P[0]
 		P = P[1:]
+		log.Printf("Select x = Tile:%v from P", x.ID)
+		log.Printf("P ← P\\{x}; P = %v", P)
 
 		// R ← R ∪ {x};
 		newR := append(R, x)
+		log.Printf("R' ← R ∪ {x}; R' = %v", newR)
 
 		//  L' ← {u ∈ L | (u, x) ∈ E(G)};
 		var newL *Bitmap
@@ -108,6 +118,7 @@ func bicliqueFind(G []BitmapPair, L *Bitmap, R []BitmapPair, P []BitmapPair, Q [
 			newL = L.Clone()
 		}
 		newL = newL.Intersect(x.Bitmap)
+		log.Printf("L' ← {u ∈ L | (u, x) ∈ E(G)}; L' = %v", newL)
 		newLcnt := newL.BitCount()
 
 		// P' ← ∅; Q' ← ∅;
@@ -116,34 +127,44 @@ func bicliqueFind(G []BitmapPair, L *Bitmap, R []BitmapPair, P []BitmapPair, Q [
 
 		// Check maximality.
 		isMaximal := true
+		log.Printf("Looping over Q=%v to see if we can use Observation 4", Q)
 		for _, v := range Q {
 			// get the neighbors of v in L'
 			neighbors := v.Bitmap.Intersect(newL)
 			ncnt := neighbors.BitCount()
+			log.Printf("  profiles shared by L' and %v are %v", v, neighbors)
 			// Observation 4: end of branch
 			if ncnt == newLcnt {
 				isMaximal = false
+				log.Printf("    Observation 4: a Tile in Q has all profiles in L', not maximal")
 				break
 			} else if ncnt > 0 {
 				newQ = append(newQ, v)
+				log.Printf("    Q' ← Q' ∪ {v}; Q' = %v", newQ)
 			}
 		}
 
 		if isMaximal {
+			log.Printf("%v, %v is a maximal candidate - check rest of P to expand to maximal", newL, newR)
 			for _, v := range P {
 				// get the neighbors of v in L'
 				neighbors := v.Bitmap.Intersect(newL)
 				ncnt := neighbors.BitCount()
+				log.Printf("  Checking %v - neighbors = %v", v, neighbors)
 				// Observation 3: expand to maximal
 				if ncnt == newLcnt {
+					log.Printf("    R' ← R' ∪ {v}; %v shares all profiles, appending to R'", v)
 					newR = append(newR, v)
 				} else if ncnt > 0 {
+					log.Printf("    P' ← P' ∪ {v}; %v shares some profiles - appending to P' for use in recursive call", v)
 					// keep vertice adjacent to some vertex in newL
 					newP = append(newP, v)
 				}
 			}
 			// report newR as maximal biclique
 			results <- newR
+			bicliqueBitmap := intersectPairs(newR)
+			log.Printf("Reporting %v, %v, as maximal", newR, bicliqueBitmap)
 			if len(newP) > 0 {
 				bicliqueFind(G, newL, newR, newP, newQ, results)
 			}
