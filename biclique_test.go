@@ -54,7 +54,7 @@ func TestBicliqueFind(t *testing.T) {
 	bms[2].Bitmap.setBit(2)
 
 	results := make(chan []BitmapPair, 30)
-	bicliqueFind(bms, nil, []BitmapPair{}, bms, []BitmapPair{}, results) // could block if too many results
+	bicliqueFind(bms, nil, []BitmapPair{}, bms, []BitmapPair{}, results, 0) // could block if too many results
 	close(results)
 
 	expectedBicliques := []bicliqueResult{
