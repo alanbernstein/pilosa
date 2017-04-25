@@ -228,7 +228,7 @@ function update_cluster_status() {
   time_node = document.getElementById('status-time')
   xhr.onload = function() {
     status_formatted = JSON.stringify(JSON.parse(xhr.responseText), null, 4)
-    status_node.innerHTML = status_formatted
+    status_node.innerHTML = highlightJSON(status_formatted)
     time_node.innerHTML = new Date().today() + " " + new Date().timeNow()
   }
   xhr.send(null)
@@ -240,6 +240,25 @@ Date.prototype.today = function () {
 
 Date.prototype.timeNow = function () {
      return ((this.getHours() < 10)?"0":"") + this.getHours() +":"+ ((this.getMinutes() < 10)?"0":"") + this.getMinutes() +":"+ ((this.getSeconds() < 10)?"0":"") + this.getSeconds();
+}
+
+function highlightJSON(json) {
+    json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
+        var cls = 'number';
+        if (/^"/.test(match)) {
+            if (/:$/.test(match)) {
+                cls = 'key';
+            } else {
+                cls = 'string';
+            }
+        } else if (/true|false/.test(match)) {
+            cls = 'boolean';
+        } else if (/null/.test(match)) {
+            cls = 'null';
+        }
+        return '<span class="' + cls + '">' + match + '</span>';
+    });
 }
 
 
