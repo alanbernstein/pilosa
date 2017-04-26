@@ -143,6 +143,7 @@ class REPL {
         'frame not found',
       ]
 
+      // handle output formatting
       if("error" in output_json) {
         result_class = "result-error"
         if(getting_started_errors.indexOf(output_json['error']) >= 0) {  
@@ -157,7 +158,34 @@ class REPL {
         }
       }
 
+      if(res["input"].startsWith("TopN(")) {
+        // this assumes only one PQL command was included in the query.
+        // any elements of results after the first are ignored
+        result_class = "result-table"
 
+        var topn_list = output_json["results"][0]
+        var table = document.createElement("table")
+
+        var header = document.createElement('tr')
+        markup = `<th>id</th>
+        <th>count</th>`
+        header.innerHTML = markup
+        table.appendChild(header)
+        for(var n=0; n<topn_list.length; n++) {
+          var row = document.createElement("tr")
+          markup = `<td>${topn_list[n]["id"]}</td>
+          <td>${topn_list[n]["count"]}</td>`
+          row.innerHTML = markup
+          table.appendChild(row)
+        }
+
+        // yuck
+        var temp_div = document.createElement("div")
+        temp_div.appendChild(table)
+        output_string = temp_div.innerHTML
+      }
+
+      // create elements and add to page
       var markup =`
         <div  class="panes">
           <div class="pane active">
