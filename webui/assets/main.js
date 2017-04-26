@@ -218,6 +218,18 @@ class REPL {
 
 }
 
+function populate_version() {
+  var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/version')
+    var node = document.getElementById('server-version')
+
+    xhr.onload = function() {
+      version = JSON.parse(xhr.responseText)['version']
+      node.innerHTML = version
+    }
+    xhr.send(null)
+}
+
 function setNav(e) {
   // toggle the nav buttons
   document.getElementsByClassName("nav-active")[0].classList.remove("nav-active")
@@ -277,6 +289,7 @@ function highlightJSON(json) {
     });
 }
 
+populate_version()
 
 const input = document.getElementById('query')
 const output = document.getElementById('outputs')
