@@ -213,7 +213,8 @@ var output_json;
         output_string = temp_div.innerHTML
       }
 
-      // create elements and add to pagevar markup =`
+      // create elements and add to pagevar
+        markup =`
         <div  class="panes">
           <div class="pane active">
             <div class="result-io">
