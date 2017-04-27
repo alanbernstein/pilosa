@@ -11,9 +11,24 @@ class REPL {
     bind_events() {
         const repl = this
         const keys = {
+          TAB: 9,
           ENTER: 13,
           UP_ARROW: 38,
           DOWN_ARROW: 40
+        }
+        const keywords = {
+          // keyword: length of substring that comes after cursor
+          "SetBit()": 1,
+          "ClearBit()": 1,
+          "SetBitmapAttrs()": 1,
+          "Bitmap()": 1,
+          "Union()": 1,
+          "Intersect()": 1,
+          "Difference()": 1,
+          "Count()": 1,
+          "Range()": 1,
+          "TopN()": 1,
+          "frame=": 0,
         }
 
         this.input.addEventListener("keydown", (e) => {
@@ -51,6 +66,33 @@ class REPL {
           if (e.keyCode == keys.ENTER && !e.shiftKey) {
             e.preventDefault()
             this.submit();
+          }
+          if (e.keyCode == keys.TAB) {
+            e.preventDefault()
+
+            // extract word ending at cursor
+            var word_start = this.input.selectionEnd-1
+            while(word_start>0) {
+              var c = this.input.value.charCodeAt(word_start)
+              if(!((c>64 && c<91) || (c>96 && c<123))) {
+                word_start++
+                break
+              }
+              word_start--
+            }
+            var input_word = this.input.value.substring(word_start, this.input.selectionEnd)
+
+            // check for keyword match and insert
+            // this just stops at the first match
+            for(var keyword in keywords) {
+              if(keyword.startsWith(input_word)){
+                var completion = keyword.substring(input_word.length)
+                this.input.value += completion
+                var pos = this.input.value.length - keywords[keyword]
+                this.input.setSelectionRange(pos, pos)
+                break
+              }
+            }
           }
         })
         this.button.onclick = function() {
@@ -118,36 +160,60 @@ class REPL {
     }
 
     createSingleOutput(res) {
-        var node = document.createElement("div");
-        node.classList.add('output');
-        var output_string = res['output']
-        var result_class = "result-output"
-        var getting_started_errors = [
-            'index not found',
-            'frame not found',
-        ]
-        var output_json;
-        if (res["status"] != 200) {
-            result_class = "result-error";
-            if (isJSON(output_string)){
+      var node = document.createElement("div");
+      node.classList.add('output');
+      var output_string = res['output']
+      var  result_class = "result-output"
+      var getting_started_errors = [
+        'index not found',
+        'frame not found',
+      ]
+var output_json;
+      // handle output formattingif(res["status"] != 200) {
+        result_class = "result-error";
+        if (isJSON(output_string)){
                 output_json = JSON.parse(output_string)
-                 if ("error" in output_json) {
-                if (getting_started_errors.indexOf(output_json['error']) >= 0) {
-                    output_string += `<br />
-              <br />
-              Just getting started? Try this:<br />
-              $ curl -XPOST "http://127.0.0.1:10101/index/test" -d '{"options": {"columnLabel": "col"}}' # create index "test"<br />
-              $ curl -XPOST "http://127.0.0.1:10101/index/test/frame/foo" -d '{"options": {"rowLabel": "row"}}' # create frame "foo"<br />
-              # Select "test" in the index dropdown above<br />
-              SetBit(row=0, col=0, frame=foo) # Use PQL to set a bit
-              `
-                    }
-                }
-            }
+                 if ("error" in output_json) {if(getting_started_errors.indexOf(output_json['error']) >= 0) {
+          output_string += `<br />
+          <br />
+          Just getting started? Try this:<br />
+          $ curl -XPOST "http://127.0.0.1:10101/index/test" -d '{"options": {"columnLabel": "col"}}' # create index "test"<br />
+          $ curl -XPOST "http://127.0.0.1:10101/index/test/frame/foo" -d '{"options": {"rowLabel": "row"}}' # create frame "foo"<br />
+          # Select "test" in the index dropdown above<br />
+          SetBit(row=0, col=0, frame=foo) # Use PQL to set a bit
+          `
+        }
+      }}
         }
 
+      if(res["input"].startsWith("TopN(")) {
+        // this assumes only one PQL command was included in the query.
+        // any elements of results after the first are ignored
+        result_class = "result-table"
 
-        var markup = `
+      var topn_list = output_json["results"][0]
+        var table = document.createElement("table")
+
+        var header = document.createElement('tr')
+        markup = `<th>id</th>
+        <th>count</th>`
+        header.innerHTML = markup
+        table.appendChild(header)
+        for(var n=0; n<topn_list.length; n++) {
+          var row = document.createElement("tr")
+          markup = `<td>${topn_list[n]["id"]}</td>
+          <td>${topn_list[n]["count"]}</td>`
+          row.innerHTML = markup
+          table.appendChild(row)
+        }
+
+        // yuck
+        var temp_div = document.createElement("div")
+        temp_div.appendChild(table)
+        output_string = temp_div.innerHTML
+      }
+
+      // create elements and add to pagevar markup =`
         <div  class="panes">
           <div class="pane active">
             <div class="result-io">
@@ -206,6 +272,18 @@ class REPL {
 
 }
 
+function populate_version() {
+  var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/version')
+    var node = document.getElementById('server-version')
+
+    xhr.onload = function() {
+      version = JSON.parse(xhr.responseText)['version']
+      node.innerHTML = version
+    }
+    xhr.send(null)
+}
+
 function setNav(e) {
     // toggle the nav buttons
     document.getElementsByClassName("nav-active")[0].classList.remove("nav-active")
@@ -217,25 +295,114 @@ function setNav(e) {
     interface_el = document.getElementById('interface-' + name)
     interface_el.classList.add("interface-active")
 
-    // hack hack
-    if (name == "cluster") {
-        update_cluster_status()
-    }
-
+  // hack hack
+  switch(name ) {
+    case "cluster":
+    update_cluster_status()
+  break
+    case "documentation":
+      open_external_docs()
+      break
+}
 }
 
 
 function update_cluster_status() {
-    var xhr = new XMLHttpRequest();
-    xhr.open('GET', '/status')
-    status_node = document.getElementById('status')
-    time_node = document.getElementById('status-time')
-    xhr.onload = function () {
-        status_formatted = JSON.stringify(JSON.parse(xhr.responseText), null, 4)
-        status_node.innerHTML = highlightJSON(status_formatted)
-        time_node.innerHTML = new Date().today() + " " + new Date().timeNow()
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', '/status')
+  status_node = document.getElementById('status')
+  time_node = document.getElementById('status-time')
+  xhr.onload = function() {
+    var status =JSON.parse(xhr.responseText)
+    render_status(status)
+    time_node.innerHTML = new Date().today() + " " + new Date().timeNow()
+  }
+  xhr.send(null)
+}
+
+function render_status(status) {
+  // render node table
+  var nodes_div = document.getElementById("status-nodes")
+  while (nodes_div.firstChild) {
+    nodes_div.removeChild(nodes_div.firstChild);
+  }
+
+  var nodes = status["status"]["Nodes"]
+  table = document.createElement("table")
+  tbody = document.createElement("tbody")
+  table.appendChild(tbody)
+  var caption = document.createElement("caption")
+  caption.innerHTML = "(" + nodes.length + ")"
+  tbody.appendChild(caption)
+
+  var header = document.createElement('tr')
+  markup = `<th>Host</th>
+  <th>State</th>`
+  header.innerHTML = markup
+  table.appendChild(header)
+  for(var n=0; n<nodes.length; n++) {
+    var row = document.createElement("tr")
+    markup = `<td>${nodes[n]["Host"]}</td>
+    <td>${nodes[n]["State"]}</td>`
+    row.innerHTML = markup
+    tbody.appendChild(row)
+  }
+  nodes_div.appendChild(table)
+
+  // render index tables
+  var indexes_div = document.getElementById("status-indexes")
+  while (indexes_div.firstChild) {
+    indexes_div.removeChild(indexes_div.firstChild);
+  }
+
+  var indexes = nodes[0]["Indexes"] // TODO currently comes from only node 0
+  for(var n=0; n<indexes.length; n++) {
+    table = document.createElement("table")
+    tbody = document.createElement("tbody")
+    table.appendChild(tbody)
+    var caption = document.createElement("caption")
+    caption.innerHTML = indexes[n]["Name"] + " (Column Label: " + indexes[n]["Meta"]["ColumnLabel"] + ")"
+    table.appendChild(caption)
+
+    var header = document.createElement('tr')
+    markup = `<th>Name</th>
+    <th>Row Label</th>
+    <th>Cache Type</th>
+    <th>Cache Size</th>`
+    header.innerHTML = markup
+    tbody.appendChild(header)
+
+    var frames = indexes[n]["Frames"]
+    for(var m=0; m<frames.length; m++) {
+      var row = document.createElement("tr")
+      markup = `<td>${frames[m]["Name"]}</td>
+      <td>${frames[m]["Meta"]["RowLabel"]}</td>
+      <td>${frames[m]["Meta"]["CacheType"]}</td>
+      <td>${frames[m]["Meta"]["CacheSize"]}</td>`
+      row.innerHTML = markup
+      tbody.appendChild(row)
     }
-    xhr.send(null)
+    indexes_div.appendChild(table)
+  }
+
+  // render slice tables
+  // TODO enable when Slices element is present in status response
+  /*
+  var slices_div = document.getElementById("status-slices")
+  data = ""
+  for(var n=0; n<nodes.length; n++) {
+    var indexes = nodes[n]["Indexes"]
+    for(var m=0; m<indexes.length; m++) {
+      data += nodes[n]["Host"] + "/" + indexes[m]["Name"] + ": " + indexes[m]["Slices"] + "<br />"
+    }
+  }
+  slices_div.innerHTML = data
+  */
+
+}
+
+function open_external_docs() {
+  window.open("https://www.pilosa.com/docs");
 }
 
 Date.prototype.today = function () {
@@ -246,25 +413,7 @@ Date.prototype.timeNow = function () {
     return ((this.getHours() < 10) ? "0" : "") + this.getHours() + ":" + ((this.getMinutes() < 10) ? "0" : "") + this.getMinutes() + ":" + ((this.getSeconds() < 10) ? "0" : "") + this.getSeconds();
 }
 
-function highlightJSON(json) {
-    json = json.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-    return json.replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, function (match) {
-        var cls = 'number';
-        if (/^"/.test(match)) {
-            if (/:$/.test(match)) {
-                cls = 'key';
-            } else {
-                cls = 'string';
-            }
-        } else if (/true|false/.test(match)) {
-            cls = 'boolean';
-        } else if (/null/.test(match)) {
-            cls = 'null';
-        }
-        return '<span class="' + cls + '">' + match + '</span>';
-    });
-}
-
+populate_version()
 function isJSON(str) {
     try {
         JSON.parse(output_string)
