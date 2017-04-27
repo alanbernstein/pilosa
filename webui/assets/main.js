@@ -111,35 +111,50 @@ class REPL {
 
     process_query(query) {
         var xhr = new XMLHttpRequest();
-        var url, data;
+        var url, data, request;
         var e = document.getElementById("index-dropdown");
         var indexname = e.options[e.selectedIndex].text;
         if (query.startsWith(":")) {
+            // probably separate to a different function when option getting bigger
             var keys = query.replace(/\s+/g, " ").split(" ");
             var command = keys[0];
             var command_type = keys[1];
             var command_name = keys[2];
-            switch (command) {
-                case ":create":
-                    switch (command_type) {
-                        case "index":
-                            url = '/index/' + command_name;
-                            data = "";
+            switch (command_type) {
+                case "index":
+                    url = '/index/' + command_name;
+                    data = "";
+                    switch (command) {
+                        case ":create":
+                            request = "POST";
                             break;
-                        case "frame":
-                            if (!command_name) {
-                                command_name = "";
-                            }
-                            url = '/index/' + indexname + '/frame/' + command_name;
-                            data = "";
+                        case ":delete":
+                            request = "DELETE";
                             break;
                     }
+                    break;
+                case "frame":
+                    if (!command_name) {
+                        command_name = "";
+                    }
+                    url = '/index/' + indexname + '/frame/' + command_name;
+                    data = "";
+                    switch (command) {
+                        case ":create":
+                            request = "POST";
+                            break;
+                        case ":delete":
+                            request = "DELETE";
+                            break;
+                    }
+                    break;
             }
         } else {
+            request = "POST";
             url = '/index/' + indexname + '/query';
             data = query
         }
-        xhr.open('POST', url);
+        xhr.open(request, url);
         xhr.setRequestHeader('Content-Type', 'application/text');
 
         const repl = this;
