@@ -184,7 +184,7 @@ var output_json;
           `
         }
       }}
-        }
+
 
       if(res["input"].startsWith("TopN(")) {
         // this assumes only one PQL command was included in the query.
