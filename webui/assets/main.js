@@ -69,54 +69,85 @@ class REPL {
 
     process_query(query) {
         var xhr = new XMLHttpRequest();
+        var url, data;
         var e = document.getElementById("index-dropdown");
         var indexname = e.options[e.selectedIndex].text;
-        xhr.open('POST', '/index/' + indexname + '/query');
+        if (query.startsWith(":")) {
+            var keys = query.replace(/\s+/g, " ").split(" ");
+            var command = keys[0];
+            var command_type = keys[1];
+            var command_name = keys[2];
+            switch (command) {
+                case ":create":
+                    switch (command_type) {
+                        case "index":
+                            url = '/index/' + command_name;
+                            data = "";
+                            break;
+                        case "frame":
+                            if (!command_name) {
+                                command_name = "";
+                            }
+                            url = '/index/' + indexname + '/frame/' + command_name;
+                            data = "";
+                            break;
+                    }
+            }
+        } else {
+            url = '/index/' + indexname + '/query';
+            data = query
+        }
+        xhr.open('POST', url);
         xhr.setRequestHeader('Content-Type', 'application/text');
 
-        const repl = this
+        const repl = this;
         var start_time = new Date().getTime();
-        xhr.send(query)
-        xhr.onload = function() {
-            var end_time = new Date().getTime()
+        xhr.onload = function () {
+            var end_time = new Date().getTime();
             repl.result_number++
             repl.createSingleOutput({
-              "input": query, 
-              "output": xhr.responseText, 
-              "indexname": indexname,
-              "querytime_ms": end_time - start_time,
+                "input": query,
+                "output": xhr.responseText,
+                "status": xhr.status,
+                "indexname": indexname,
+                "querytime_ms": end_time - start_time,
             })
-        }
+        };
 
+        xhr.send(data);
     }
 
     createSingleOutput(res) {
-      var node = document.createElement("div");
-      node.classList.add('output');
-      var output_string = res['output']
-      var output_json = JSON.parse(output_string)
-      var result_class = "result-output"
-      var getting_started_errors = [
-        'index not found',
-        'frame not found',
-      ]
-
-      if("error" in output_json) {
-        result_class = "result-error"
-        if(getting_started_errors.indexOf(output_json['error']) >= 0) {  
-          output_string += `<br />
-          <br />
-          Just getting started? Try this:<br />
-          $ curl -XPOST "http://127.0.0.1:10101/index/test" -d '{"options": {"columnLabel": "col"}}' # create index "test"<br />
-          $ curl -XPOST "http://127.0.0.1:10101/index/test/frame/foo" -d '{"options": {"rowLabel": "row"}}' # create frame "foo"<br />
-          # Select "test" in the index dropdown above<br />
-          SetBit(row=0, col=0, frame=foo) # Use PQL to set a bit
-          `
+        var node = document.createElement("div");
+        node.classList.add('output');
+        var output_string = res['output']
+        var result_class = "result-output"
+        var getting_started_errors = [
+            'index not found',
+            'frame not found',
+        ]
+        var output_json;
+        if (res["status"] != 200) {
+            result_class = "result-error";
+            if (isJSON(output_string)){
+                output_json = JSON.parse(output_string)
+                 if ("error" in output_json) {
+                if (getting_started_errors.indexOf(output_json['error']) >= 0) {
+                    output_string += `<br />
+              <br />
+              Just getting started? Try this:<br />
+              $ curl -XPOST "http://127.0.0.1:10101/index/test" -d '{"options": {"columnLabel": "col"}}' # create index "test"<br />
+              $ curl -XPOST "http://127.0.0.1:10101/index/test/frame/foo" -d '{"options": {"rowLabel": "row"}}' # create frame "foo"<br />
+              # Select "test" in the index dropdown above<br />
+              SetBit(row=0, col=0, frame=foo) # Use PQL to set a bit
+              `
+                    }
+                }
+            }
         }
-      }
 
 
-      var markup =`
+        var markup = `
         <div  class="panes">
           <div class="pane active">
             <div class="result-io">
@@ -148,71 +179,71 @@ class REPL {
           </div>
         </div>
       `
-      node.innerHTML = markup;
-      this.output.insertBefore(node, this.output.firstChild)
+        node.innerHTML = markup;
+        this.output.insertBefore(node, this.output.firstChild)
     }
 
     populate_index_dropdown() {
-      var xhr = new XMLHttpRequest();
-      xhr.open('GET', '/schema')
-      var select = document.getElementById('index-dropdown')
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', '/schema')
+        var select = document.getElementById('index-dropdown')
 
-      xhr.onload = function() {
-        var schema = JSON.parse(xhr.responseText)
-        for(var i=0; i<schema['indexes'].length; i++) {
-          var opt = document.createElement('option')
-          opt.value = i+1
-          opt.innerHTML = schema['indexes'][i]['name']
-          select.appendChild(opt)
+        xhr.onload = function () {
+            var schema = JSON.parse(xhr.responseText)
+            for (var i = 0; i < schema['indexes'].length; i++) {
+                var opt = document.createElement('option')
+                opt.value = i + 1
+                opt.innerHTML = schema['indexes'][i]['name']
+                select.appendChild(opt)
+            }
+            // set the active option to one of the populated options, instead of invalid "Index"
+            if (i > 0) {
+                select.value = 1;
+            }
         }
-        // set the active option to one of the populated options, instead of invalid "Index"
-        if(i > 0) {
-          select.value = 1;
-        }
-      }
-      xhr.send(null)
+        xhr.send(null)
     }
 
 }
 
 function setNav(e) {
-  // toggle the nav buttons
-  document.getElementsByClassName("nav-active")[0].classList.remove("nav-active")
-  e.classList.add("nav-active")
+    // toggle the nav buttons
+    document.getElementsByClassName("nav-active")[0].classList.remove("nav-active")
+    e.classList.add("nav-active")
 
-  // toggle the main interface content divs
-  document.getElementsByClassName("interface-active")[0].classList.remove("interface-active")
-  name = e.id.substring(4)
-  interface_el = document.getElementById('interface-' + name)
-  interface_el.classList.add("interface-active")
+    // toggle the main interface content divs
+    document.getElementsByClassName("interface-active")[0].classList.remove("interface-active")
+    name = e.id.substring(4)
+    interface_el = document.getElementById('interface-' + name)
+    interface_el.classList.add("interface-active")
 
-  // hack hack
-  if(name == "cluster") {
-    update_cluster_status()
-  }
+    // hack hack
+    if (name == "cluster") {
+        update_cluster_status()
+    }
 
 }
 
 
 function update_cluster_status() {
-  var xhr = new XMLHttpRequest();
-  xhr.open('GET', '/status')
-  status_node = document.getElementById('status')
-  time_node = document.getElementById('status-time')
-  xhr.onload = function() {
-    status_formatted = JSON.stringify(JSON.parse(xhr.responseText), null, 4)
-    status_node.innerHTML = highlightJSON(status_formatted)
-    time_node.innerHTML = new Date().today() + " " + new Date().timeNow()
-  }
-  xhr.send(null)
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/status')
+    status_node = document.getElementById('status')
+    time_node = document.getElementById('status-time')
+    xhr.onload = function () {
+        status_formatted = JSON.stringify(JSON.parse(xhr.responseText), null, 4)
+        status_node.innerHTML = highlightJSON(status_formatted)
+        time_node.innerHTML = new Date().today() + " " + new Date().timeNow()
+    }
+    xhr.send(null)
 }
 
-Date.prototype.today = function () { 
-    return this.getFullYear() +"/"+ (((this.getMonth()+1) < 10)?"0":"") + (this.getMonth()+1) +"/"+ ((this.getDate() < 10)?"0":"") + this.getDate();
+Date.prototype.today = function () {
+    return this.getFullYear() + "/" + (((this.getMonth() + 1) < 10) ? "0" : "") + (this.getMonth() + 1) + "/" + ((this.getDate() < 10) ? "0" : "") + this.getDate();
 }
 
 Date.prototype.timeNow = function () {
-     return ((this.getHours() < 10)?"0":"") + this.getHours() +":"+ ((this.getMinutes() < 10)?"0":"") + this.getMinutes() +":"+ ((this.getSeconds() < 10)?"0":"") + this.getSeconds();
+    return ((this.getHours() < 10) ? "0" : "") + this.getHours() + ":" + ((this.getMinutes() < 10) ? "0" : "") + this.getMinutes() + ":" + ((this.getSeconds() < 10) ? "0" : "") + this.getSeconds();
 }
 
 function highlightJSON(json) {
@@ -234,7 +265,14 @@ function highlightJSON(json) {
     });
 }
 
-
+function isJSON(str) {
+    try {
+        JSON.parse(output_string)
+    } catch (e) {
+        return false
+    }
+    return true
+}
 const input = document.getElementById('query')
 const output = document.getElementById('outputs')
 const button = document.getElementById('query-btn')
