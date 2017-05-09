@@ -19,6 +19,8 @@ import (
 	"io"
 	"strconv"
 	"strings"
+
+	opentracing "github.com/opentracing/opentracing-go"
 )
 
 // TimeFormat is the go-style time format used to parse string dates.
@@ -38,11 +40,14 @@ func NewParser(r io.Reader) *Parser {
 
 // ParseString parses s into a query.
 func ParseString(s string) (*Query, error) {
-	return NewParser(strings.NewReader(s)).Parse()
+	return NewParser(strings.NewReader(s)).Parse(nil)
 }
 
 // Parse parses the next node in the query.
-func (p *Parser) Parse() (*Query, error) {
+func (p *Parser) Parse(span opentracing.Span) (*Query, error) {
+	childSpan := opentracing.GlobalTracer().StartSpan("Parser.Parse", opentracing.ChildOf(span.Context()))
+	defer childSpan.Finish()
+
 	q := &Query{}
 	for {
 		call, err := p.parseCall()

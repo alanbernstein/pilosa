@@ -37,6 +37,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/gorilla/mux"
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/pilosa/pilosa/internal"
 	"github.com/pilosa/pilosa/pql"
 
@@ -49,6 +50,7 @@ type Handler struct {
 	Holder        *Holder
 	Broadcaster   Broadcaster
 	StatusHandler StatusHandler
+	MainSpan      opentracing.Span
 
 	// Local hostname & cluster configuration.
 	Host    string
@@ -58,7 +60,7 @@ type Handler struct {
 
 	// The execution engine for running queries.
 	Executor interface {
-		Execute(context context.Context, index string, query *pql.Query, slices []uint64, opt *ExecOptions) ([]interface{}, error)
+		Execute(context context.Context, index string, query *pql.Query, slices []uint64, opt *ExecOptions, span opentracing.Span) ([]interface{}, error)
 	}
 
 	// The version to report on the /version endpoint.
@@ -72,6 +74,7 @@ type Handler struct {
 func NewHandler() *Handler {
 	handler := &Handler{
 		LogOutput: os.Stderr,
+		MainSpan:  opentracing.GlobalTracer().StartSpan("Handler"),
 	}
 	handler.Router = NewRouter(handler)
 	return handler
@@ -79,6 +82,8 @@ func NewHandler() *Handler {
 
 // NewRouter creates a Gorilla Mux http router.
 func NewRouter(handler *Handler) *mux.Router {
+	span := opentracing.GlobalTracer().StartSpan("mux.Route", opentracing.ChildOf(handler.MainSpan.Context()))
+	defer span.Finish()
 	router := mux.NewRouter()
 	router.HandleFunc("/", handler.handleWebUI).Methods("GET")
 	router.HandleFunc("/assets/{file}", handler.handleWebUI).Methods("GET")
@@ -146,6 +151,9 @@ func (h *Handler) handleWebUI(w http.ResponseWriter, r *http.Request) {
 
 // handleGetSchema handles GET /schema requests.
 func (h *Handler) handleGetSchema(w http.ResponseWriter, r *http.Request) {
+	span := opentracing.GlobalTracer().StartSpan("Handler.handleGetSchema", opentracing.ChildOf(h.MainSpan.Context()))
+	defer span.Finish()
+
 	if err := json.NewEncoder(w).Encode(getSchemaResponse{
 		Indexes: h.Holder.Schema(),
 	}); err != nil {
@@ -155,6 +163,8 @@ func (h *Handler) handleGetSchema(w http.ResponseWriter, r *http.Request) {
 
 // handleGetStatus handles GET /status requests.
 func (h *Handler) handleGetStatus(w http.ResponseWriter, r *http.Request) {
+	span := opentracing.GlobalTracer().StartSpan("Handler.handleGetStatus", opentracing.ChildOf(h.MainSpan.Context()))
+	defer span.Finish()
 	status, err := h.StatusHandler.ClusterStatus()
 	if err != nil {
 		h.logger().Printf("cluster status error: %s", err)
@@ -177,6 +187,8 @@ type getStatusResponse struct {
 
 // handlePostQuery handles /query requests.
 func (h *Handler) handlePostQuery(w http.ResponseWriter, r *http.Request) {
+	span := opentracing.GlobalTracer().StartSpan("Handler.handlePostQuery", opentracing.ChildOf(h.MainSpan.Context()))
+	defer span.Finish()
 	indexName := mux.Vars(r)["index"]
 
 	// Parse incoming request.
@@ -193,7 +205,7 @@ func (h *Handler) handlePostQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Parse query string.
-	q, err := pql.NewParser(strings.NewReader(req.Query)).Parse()
+	q, err := pql.NewParser(strings.NewReader(req.Query)).Parse(span)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
 		h.writeQueryResponse(w, r, &QueryResponse{Err: err})
@@ -201,7 +213,7 @@ func (h *Handler) handlePostQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Execute the query.
-	results, err := h.Executor.Execute(r.Context(), indexName, q, req.Slices, opt)
+	results, err := h.Executor.Execute(r.Context(), indexName, q, req.Slices, opt, span)
 	resp := &QueryResponse{Results: results, Err: err}
 
 	// Fill column attributes if requested.
@@ -1279,6 +1291,8 @@ func (h *Handler) handleGetHosts(w http.ResponseWriter, r *http.Request) {
 
 // handleGetVersion handles /version requests.
 func (h *Handler) handleGetVersion(w http.ResponseWriter, r *http.Request) {
+	span := opentracing.GlobalTracer().StartSpan("Handler.handleGetVersion", opentracing.ChildOf(h.MainSpan.Context()))
+	defer span.Finish()
 	if err := json.NewEncoder(w).Encode(struct {
 		Version string `json:"version"`
 	}{

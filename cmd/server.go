@@ -22,7 +22,9 @@ import (
 	"runtime/pprof"
 	"time"
 
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/spf13/cobra"
+	"github.com/uber/jaeger-client-go/config"
 
 	"github.com/pilosa/pilosa/server"
 )
@@ -30,7 +32,23 @@ import (
 // Server is global so that tests can control and verify it.
 var Server *server.Command
 
+func configureTracer() {
+	cfg := config.Configuration{
+		Sampler: &config.SamplerConfig{
+			Type:  "const",
+			Param: 1,
+		},
+		Reporter: &config.ReporterConfig{
+			LogSpans:            false,
+			BufferFlushInterval: 1 * time.Second,
+		},
+	}
+	tracer, _, _ := cfg.New("pilosa")
+	opentracing.SetGlobalTracer(tracer)
+}
+
 func NewServeCmd(stdin io.Reader, stdout, stderr io.Writer) *cobra.Command {
+	configureTracer()
 	Server = server.NewCommand(stdin, stdout, stderr)
 	serveCmd := &cobra.Command{
 		Use:   "server",
@@ -60,6 +78,8 @@ on the configured port.`,
 					f.Close()
 				})
 			}
+
+			configureTracer()
 
 			// Execute the program.
 			if err := Server.Run(); err != nil {

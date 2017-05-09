@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/pilosa/pilosa/internal"
 	"github.com/pilosa/pilosa/pql"
 )
@@ -62,7 +63,10 @@ func NewExecutor() *Executor {
 }
 
 // Execute executes a PQL query.
-func (e *Executor) Execute(ctx context.Context, index string, q *pql.Query, slices []uint64, opt *ExecOptions) ([]interface{}, error) {
+func (e *Executor) Execute(ctx context.Context, index string, q *pql.Query, slices []uint64, opt *ExecOptions, span opentracing.Span) ([]interface{}, error) {
+	childSpan := opentracing.GlobalTracer().StartSpan("Executor.Execute", opentracing.ChildOf(span.Context()))
+	defer childSpan.Finish()
+
 	// Verify that an index is set.
 	if index == "" {
 		return nil, ErrIndexRequired
@@ -143,7 +147,7 @@ func (e *Executor) Execute(ctx context.Context, index string, q *pql.Query, slic
 			}
 		}
 
-		v, err := e.executeCall(ctx, index, call, slices, opt)
+		v, err := e.executeCall(ctx, index, call, slices, opt, childSpan)
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +157,9 @@ func (e *Executor) Execute(ctx context.Context, index string, q *pql.Query, slic
 }
 
 // executeCall executes a call.
-func (e *Executor) executeCall(ctx context.Context, index string, c *pql.Call, slices []uint64, opt *ExecOptions) (interface{}, error) {
+func (e *Executor) executeCall(ctx context.Context, index string, c *pql.Call, slices []uint64, opt *ExecOptions, span opentracing.Span) (interface{}, error) {
+	childSpan := opentracing.GlobalTracer().StartSpan("Executor.executeCall", opentracing.ChildOf(span.Context()))
+	defer childSpan.Finish()
 
 	if err := e.validateCallArgs(c); err != nil {
 		return nil, err
@@ -166,15 +172,15 @@ func (e *Executor) executeCall(ctx context.Context, index string, c *pql.Call, s
 	case "Count":
 		return e.executeCount(ctx, index, c, slices, opt)
 	case "SetBit":
-		return e.executeSetBit(ctx, index, c, opt)
+		return e.executeSetBit(ctx, index, c, opt, childSpan)
 	case "SetRowAttrs":
 		return nil, e.executeSetRowAttrs(ctx, index, c, opt)
 	case "SetColumnAttrs":
 		return nil, e.executeSetColumnAttrs(ctx, index, c, opt)
 	case "TopN":
-		return e.executeTopN(ctx, index, c, slices, opt)
+		return e.executeTopN(ctx, index, c, slices, opt, childSpan)
 	default:
-		return e.executeBitmapCall(ctx, index, c, slices, opt)
+		return e.executeBitmapCall(ctx, index, c, slices, opt, childSpan)
 	}
 }
 
@@ -198,7 +204,10 @@ func (e *Executor) validateCallArgs(c *pql.Call) error {
 }
 
 // executeBitmapCall executes a call that returns a bitmap.
-func (e *Executor) executeBitmapCall(ctx context.Context, index string, c *pql.Call, slices []uint64, opt *ExecOptions) (*Bitmap, error) {
+func (e *Executor) executeBitmapCall(ctx context.Context, index string, c *pql.Call, slices []uint64, opt *ExecOptions, span opentracing.Span) (*Bitmap, error) {
+	childSpan := opentracing.GlobalTracer().StartSpan("Executor.executeBitmapCall", opentracing.ChildOf(span.Context()))
+	defer childSpan.Finish()
+
 	// Execute calls in bulk on each remote node and merge.
 	mapFn := func(slice uint64) (interface{}, error) {
 		return e.executeBitmapCallSlice(ctx, index, c, slice)
@@ -278,7 +287,10 @@ func (e *Executor) executeBitmapCallSlice(ctx context.Context, index string, c *
 // executeTopN executes a TopN() call.
 // This first performs the TopN() to determine the top results and then
 // requeries to retrieve the full counts for each of the top results.
-func (e *Executor) executeTopN(ctx context.Context, index string, c *pql.Call, slices []uint64, opt *ExecOptions) ([]Pair, error) {
+func (e *Executor) executeTopN(ctx context.Context, index string, c *pql.Call, slices []uint64, opt *ExecOptions, span opentracing.Span) ([]Pair, error) {
+	childSpan := opentracing.GlobalTracer().StartSpan("Executor.executeTopN", opentracing.ChildOf(span.Context()))
+	defer childSpan.Finish()
+
 	rowIDs, _, err := c.UintSliceArg("ids")
 	if err != nil {
 		return nil, fmt.Errorf("executeTopN: %v", err)
@@ -723,7 +735,9 @@ func (e *Executor) executeClearBitView(ctx context.Context, index string, c *pql
 }
 
 // executeSetBit executes a SetBit() call.
-func (e *Executor) executeSetBit(ctx context.Context, index string, c *pql.Call, opt *ExecOptions) (bool, error) {
+func (e *Executor) executeSetBit(ctx context.Context, index string, c *pql.Call, opt *ExecOptions, span opentracing.Span) (bool, error) {
+	childSpan := opentracing.GlobalTracer().StartSpan("Executor.executeSetBit", opentracing.ChildOf(span.Context()))
+	defer childSpan.Finish()
 	view, _ := c.Args["view"].(string)
 	frame, ok := c.Args["frame"].(string)
 	if !ok {

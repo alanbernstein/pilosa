@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	opentracing "github.com/opentracing/opentracing-go"
 	"github.com/pilosa/pilosa/internal"
 )
 
@@ -64,6 +65,7 @@ type Server struct {
 	// Misc options.
 	MaxWritesPerRequest int
 
+	MainSpan  opentracing.Span
 	LogOutput io.Writer
 }
 
@@ -72,6 +74,7 @@ func NewServer() *Server {
 	s := &Server{
 		closing: make(chan struct{}),
 
+		MainSpan:          opentracing.GlobalTracer().StartSpan("Server"),
 		Holder:            NewHolder(),
 		Handler:           NewHandler(),
 		Broadcaster:       NopBroadcaster,
@@ -161,6 +164,7 @@ func (s *Server) Open() error {
 func (s *Server) Close() error {
 	// Notify goroutines to stop.
 	close(s.closing)
+	defer s.MainSpan.Finish()
 	s.wg.Wait()
 
 	if s.ln != nil {
