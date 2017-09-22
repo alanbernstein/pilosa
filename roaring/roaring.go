@@ -1665,7 +1665,7 @@ func (c *container) size() int {
 
 // info returns the current stats about the container.
 func (c *container) info() ContainerInfo {
-	info := ContainerInfo{N: c.n}
+	info := ContainerInfo{N: c.n, Runs: c.countRuns()}
 
 	if c.isArray() {
 		info.Type = "array"
@@ -1726,6 +1726,7 @@ type ContainerInfo struct {
 	Key     uint64         // container key
 	Type    string         // container type (array, bitmap, or run)
 	N       int            // number of bits
+	Runs    int            // number of runs
 	Alloc   int            // memory used
 	Pointer unsafe.Pointer // offset within the mmap
 }

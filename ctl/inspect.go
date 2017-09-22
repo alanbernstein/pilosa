@@ -89,12 +89,13 @@ func (cmd *InspectCommand) Run(ctx context.Context) error {
 	// Print info for each container.
 	fmt.Fprintln(cmd.Stdout, "== Containers ==")
 	tw := tabwriter.NewWriter(cmd.Stdout, 0, 8, 0, '\t', 0)
-	fmt.Fprintf(tw, "%s\t%s\t% 8s \t% 8s\t%s\n", "KEY", "TYPE", "N", "ALLOC", "OFFSET")
+	fmt.Fprintf(tw, "%s\t%s\t% 8s \t% 8s\t% 8s\t%s\n", "KEY", "TYPE", "N", "RUNS", "ALLOC", "OFFSET")
 	for _, ci := range info.Containers {
-		fmt.Fprintf(tw, "%d\t%s\t% 8d \t% 8d \t0x%08x\n",
+		fmt.Fprintf(tw, "%d\t%s\t% 8d \t% 8d \t% 8d \t0x%08x\n",
 			ci.Key,
 			ci.Type,
 			ci.N,
+			ci.Runs,
 			ci.Alloc,
 			uintptr(ci.Pointer)-uintptr(unsafe.Pointer(&data[0])),
 		)
