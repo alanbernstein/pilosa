@@ -2562,61 +2562,6 @@ func differenceRunBitmap(a, b *container) *container {
 	return output
 }
 
-func differenceRunIterator(a *container, itr containerIterator) *container {
-
-	output := &container{runs: make([]interval16, 0, a.n), container_type: ContainerRun}
-
-	vb, eof := itr.next()
-	j := 0
-	vr := a.runs[j]
-	working := !eof
-	for working {
-		switch {
-		case vb < vr.start: //before
-		case vb > vr.last: //after
-			if vr.start <= vr.last {
-				output.n += output.runAppendInterval(vr)
-			}
-			j++
-			if j < len(a.runs) {
-				vr = a.runs[j]
-			} else {
-				working = false
-			}
-		case vb == vr.start: //begining of run
-			vr.start++
-		case vb == a.runs[j].last: //end of run
-			vr.last--
-			if vr.last >= vr.start {
-				output.n += output.runAppendInterval(vr)
-			}
-			j++
-			if j < len(a.runs) {
-				vr = a.runs[j]
-			} else {
-				working = false
-			}
-		case vb > vr.start: //inside run
-			output.n += output.runAppendInterval(interval16{start: vr.start, last: vb - 1})
-			vr.start = vb + 1
-
-		}
-		vb, eof = itr.next()
-		if eof {
-			working = false
-		}
-	}
-	if vr.start <= vr.last {
-		output.n += output.runAppendInterval(vr)
-	}
-	if output.n < ArrayMaxSize && len(output.runs) > output.n/2 {
-		output.runToArray()
-	} else if len(output.runs) > RunMaxSize {
-		output.runToBitmap()
-	}
-	return output
-}
-
 // differenceRunRun computes the difference of two runs.
 func differenceRunRun(a, b *container) *container {
 	if a.n == 0 || b.n == 0 {
@@ -3002,34 +2947,6 @@ func popcount(x uint64) (n uint64) {
 	x &= 0x0f0f0f0f0f0f0f0f
 	x *= 0x0101010101010101
 	return x >> 56
-}
-
-// Returns eof as true if there are no values left in the iterator.
-type containerIterator interface {
-	next() (uint16, bool)
-}
-
-// arrayIterator represents an iterator over container array values.
-type arrayIterator struct {
-	array []uint16
-	i     int
-}
-
-func newArrayIterator(array []uint16) *arrayIterator {
-	return &arrayIterator{
-		array: array,
-		i:     -1,
-	}
-}
-
-// next returns the next value in the array.
-func (itr *arrayIterator) next() (v uint16, eof bool) {
-
-	itr.i++
-	if itr.i >= len(itr.array) {
-		return 0, true
-	}
-	return itr.array[itr.i], false
 }
 
 // bitmapIterator represents an iterator over container bitmap values.
