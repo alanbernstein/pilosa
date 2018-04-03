@@ -3,6 +3,7 @@
 </a>
 
 [![Build Status](https://travis-ci.com/pilosa/pilosa.svg?token=Peb4jvQ3kLbjUEhpU5aR&branch=master)](https://travis-ci.com/pilosa/pilosa)
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Falanbernstein%2Fpilosa.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2Falanbernstein%2Fpilosa?ref=badge_shield)
 
 ## An open source, distributed bitmap index.
 - [Docs](#docs)
@@ -62,3 +63,7 @@ There are [several channels](https://www.pilosa.com/community/#support) availabl
 ## Contributing
 
 Pilosa is an open source project. Please see our [Contributing Guide](https://www.pilosa.com/docs/contributing/) for information about how to get involved.
+
+
+## License
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2Falanbernstein%2Fpilosa.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2Falanbernstein%2Fpilosa?ref=badge_large)
