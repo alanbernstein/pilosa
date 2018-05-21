@@ -126,7 +126,7 @@ func (h *Holder) Open() error {
 			return errors.Wrap(err, "opening index")
 		}
 		if err := index.Open(); err != nil {
-			if err == ErrName {
+			if errors.Cause(err) == ErrName {
 				h.Logger.Printf("ERROR opening index: %s, err=%s", index.Name(), err)
 				continue
 			}
@@ -723,7 +723,7 @@ func (s *HolderSyncer) syncFrame(index, name string) error {
 		// Retrieve attributes from differing blocks.
 		// Skip update and recomputation if no attributes have changed.
 		m, err := client.RowAttrDiff(context.Background(), index, name, blks)
-		if err == ErrFrameNotFound {
+		if errors.Cause(err) == ErrFrameNotFound {
 			continue // frame not created remotely yet, skip
 		} else if err != nil {
 			return errors.Wrap(err, "getting differing blocks")

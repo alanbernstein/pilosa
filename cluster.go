@@ -1274,7 +1274,7 @@ func (c *Cluster) FollowResizeInstruction(instr *internal.ResizeInstruction) err
 					// the resize instruction to retrieve the slice, but it doesn't have data.
 					// TODO: figure out a way to distinguish from "fragment not found" errors
 					// which are true errors and which simply mean the fragment doesn't have data.
-					if err == ErrFragmentNotFound {
+					if errors.Cause(err) == ErrFragmentNotFound {
 						return nil
 					}
 					return errors.Wrap(err, "retrieving slice")

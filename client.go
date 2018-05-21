@@ -335,7 +335,7 @@ func (c *InternalHTTPClient) ImportK(ctx context.Context, index, frame string, b
 
 func (c *InternalHTTPClient) EnsureIndex(ctx context.Context, name string, options IndexOptions) error {
 	err := c.CreateIndex(ctx, name, options)
-	if err == nil || err == ErrIndexExists {
+	if err == nil || errors.Cause(err) == ErrIndexExists {
 		return nil
 	}
 	return err
@@ -343,7 +343,7 @@ func (c *InternalHTTPClient) EnsureIndex(ctx context.Context, name string, optio
 
 func (c *InternalHTTPClient) EnsureFrame(ctx context.Context, indexName string, frameName string, options FrameOptions) error {
 	err := c.CreateFrame(ctx, indexName, frameName, options)
-	if err == nil || err == ErrFrameExists {
+	if err == nil || errors.Cause(err) == ErrFrameExists {
 		return nil
 	}
 	return err
@@ -681,7 +681,7 @@ func (c *InternalHTTPClient) BackupSlice(ctx context.Context, index, frame, view
 		r, err := c.backupSliceNode(ctx, index, frame, view, slice, nodes[i])
 		if err == nil {
 			return r, nil // successfully attached
-		} else if err == ErrFragmentNotFound {
+		} else if errors.Cause(err) == ErrFragmentNotFound {
 			return nil, nil // slice doesn't exist
 		} else if err != nil {
 			log.Println(err)
