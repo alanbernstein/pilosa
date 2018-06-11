@@ -22,7 +22,247 @@ import (
 	_ "github.com/pilosa/pilosa/test"
 )
 
-// Ensure the parser can parse PQL.
+// Ensure the parser can parse specific PQL combinations.
+func TestParser_Pql(t *testing.T) {
+
+	tests := []struct {
+		pql    string
+		pqlOld string
+		call   pql.Call
+	}{
+		{
+			pql:    "Row(aaa=10)",
+			pqlOld: "Bitmap(frame=aaa, row=10)",
+			call: pql.Call{
+				Name: "Row",
+				Args: map[string]interface{}{
+					"frame": "aaa",
+					"row":   int64(10),
+				},
+			},
+		},
+		{
+			pql:    "Range(bbb > 20)",
+			pqlOld: "Range(frame=bbb, fld > 20)",
+			call: pql.Call{
+				Name: "Row",
+				Args: map[string]interface{}{
+					"frame": "bbb",
+					"bbb":   &pql.Condition{Op: pql.GT, Value: 20},
+				},
+			},
+		},
+		{
+			pql:    "Range(10 < bbb < 20)",
+			pqlOld: "Range(frame=bbb, fld >< [10, 20])",
+			call: pql.Call{
+				Name: "Row",
+				Args: map[string]interface{}{
+					"frame": "bbb",
+					"bbb":   &pql.Condition{Op: pql.GT, Value: []interface{}{10, 20}},
+				},
+			},
+		},
+		{
+			pql:    "Set(aaa=10, col=100)",
+			pqlOld: "SetBit(frame=aaa, row=10, col=100)",
+			call: pql.Call{
+				Name: "Set",
+				Args: map[string]interface{}{
+					"frame": "aaa",
+					"row":   int64(10),
+					"col":   int64(100),
+				},
+			},
+		},
+		{
+			pql:    `Set(aaa=10, col=100, "2017-03-02T03:00")`,
+			pqlOld: `SetBit(frame=aaa, row=10, col=100, timestamp="2017-03-02T03:00")`,
+			call: pql.Call{
+				Name: "Set",
+				Args: map[string]interface{}{
+					"frame":     "aaa",
+					"row":       int64(10),
+					"col":       int64(100),
+					"timestamp": "2017-03-02T03:00",
+				},
+			},
+		},
+		{
+			pql:    "Set(bbb=8, col=200)",
+			pqlOld: "SetFieldValue(frame=bbb, col=200, fld=8)",
+			call: pql.Call{
+				Name: "Set",
+				Args: map[string]interface{}{
+					"frame": "bbb",
+					"col":   int64(200),
+					"fld":   8,
+				},
+			},
+		},
+		{
+			pql:    "Count(Row(aaa=10))",
+			pqlOld: "Count(Bitmap(frame=aaa, row=10))",
+			call: pql.Call{
+				Name: "Count",
+				Children: []*pql.Call{{
+					Name: "Bitmap",
+					Args: map[string]interface{}{"frame": "aaa", "row": int64(10)},
+				}},
+			},
+		},
+		{
+			pql:    "Union(Row(aaa=10), Row(aaa=11))",
+			pqlOld: "Union(Bitmap(frame=aaa, row=10), Bitmap(frame=aaa, row=11))",
+			call: pql.Call{
+				Name: "Union",
+				Children: []*pql.Call{
+					{
+						Name: "Bitmap",
+						Args: map[string]interface{}{"frame": "aaa", "row": int64(10)},
+					},
+					{
+						Name: "Bitmap",
+						Args: map[string]interface{}{"frame": "aaa", "row": int64(11)},
+					},
+				},
+			},
+		},
+		{
+			pql:    "Union(Row(aaa=10), Row(bbb<30))",
+			pqlOld: "Union(Bitmap(frame=aaa, row=10), Range(frame=bbb, bsi < 30))",
+			call: pql.Call{
+				Name: "Union",
+				Children: []*pql.Call{
+					{
+						Name: "Row",
+						Args: map[string]interface{}{"frame": "aaa", "row": int64(10)},
+					},
+					{
+						Name: "Range",
+						Args: map[string]interface{}{"frame": "bbb", "bbb": &pql.Condition{Op: pql.LT, Value: 30}},
+					},
+				},
+			},
+		},
+		{
+			pql:    "TopN(field=aaa, n=25)",
+			pqlOld: "TopN(frame=aaa, n=25)",
+			call: pql.Call{
+				Name: "TopN",
+				Args: map[string]interface{}{
+					"frame": "aaa",
+					"n":     int64(25),
+				},
+			},
+		},
+		{
+			pql:    "TopN(field=aaa, ids=[10, 20, 30])",
+			pqlOld: "TopN(frame=aaa, ids=[10, 20, 30])",
+			call: pql.Call{
+				Name: "TopN",
+				Args: map[string]interface{}{
+					"frame": "aaa",
+					"ids":   []int64{10, 20, 30},
+				},
+			},
+		},
+		{
+			pql:    "TopN(field=aaa, attrName=foo, attrVals=[10, 20, 30])",
+			pqlOld: "TopN(frame=aaa, field=foo, filters=[10, 20, 30])",
+			call: pql.Call{
+				Name: "TopN",
+				Args: map[string]interface{}{
+					"frame":    "aaa",
+					"attrName": "foo",
+					"attrVals": []int64{10, 20, 30},
+				},
+			},
+		},
+		{
+			pql:    "TopN(field=aaa, threshold=5)",
+			pqlOld: "TopN(frame=aaa, threshold=5)",
+			call: pql.Call{
+				Name: "TopN",
+				Args: map[string]interface{}{
+					"frame":     "aaa",
+					"n":         int64(25),
+					"threshold": 5,
+				},
+			},
+		},
+		{
+			pql:    "TopN(field=aaa, n=25, threshold=5)",
+			pqlOld: "TopN(frame=aaa, n=25, threshold=5)",
+			call: pql.Call{
+				Name: "TopN",
+				Args: map[string]interface{}{
+					"frame":     "aaa",
+					"n":         int64(25),
+					"threshold": 5,
+				},
+			},
+		},
+		{
+			pql:    "TopN(Row(aaa=10), field=aaa, n=25)",
+			pqlOld: "TopN(Bitmap(frame=aaa, row=10), frame=aaa, n=25)",
+			call: pql.Call{
+				Name: "TopN",
+				Children: []*pql.Call{
+					{
+						Name: "Row",
+						Args: map[string]interface{}{"frame": "aaa", "row": int64(10)},
+					},
+				},
+				Args: map[string]interface{}{"frame": "aaa", "n": int64(25)},
+			},
+		},
+		{
+			pql:    "TopN(Row(aaa=10), field=aaa, n=25, threshold=5)",
+			pqlOld: "TopN(Bitmap(frame=aaa, row=10), frame=aaa, n=25, threshold=5)",
+			call: pql.Call{
+				Name: "TopN",
+				Children: []*pql.Call{
+					{
+						Name: "Row",
+						Args: map[string]interface{}{
+							"frame":     "aaa",
+							"row":       int64(10),
+							"threshold": 5,
+						},
+					},
+				},
+				Args: map[string]interface{}{"frame": "aaa", "n": int64(25)},
+			},
+		},
+		{
+			pql:    `Row(ts=1, "2010-01-01T00:00", "2017-03-02T03:00")`,
+			pqlOld: `Range(frame=ts, row=1, start="2010-01-01T00:00", end="2017-03-02T03:00")`,
+			call: pql.Call{
+				Name: "Row",
+				Args: map[string]interface{}{
+					"frame": "ts",
+					"row":   int64(1),
+					"start": "2010-01-01T00:00",
+					"end":   "2017-03-02T03:00",
+				},
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.pql, func(t *testing.T) {
+			q, err := pql.ParseString(test.pql)
+			if err != nil {
+				t.Error(err)
+			} else if !reflect.DeepEqual(q.Calls[0], &test.call) {
+				t.Errorf("unexpected call: %s, exp: %s", q.Calls[0], &test.call)
+			}
+		})
+	}
+}
+
+// Ensure the parser can parse generally.
 func TestParser_Parse(t *testing.T) {
 	// Parse with no children or arguments.
 	t.Run("Empty", func(t *testing.T) {
